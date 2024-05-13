@@ -13,14 +13,18 @@ class InstanceDiffusionTrackingPromptNode:
                              "fusers": ("FUSERS", ),
                              "positive_text": ("STRING", {"multiline": True}),
                              "negative_text": ("STRING", {"multiline": True}),
-                             }}
+                             },
+                "optional": {
+                                "masks": ("MASK",),
+                            }
+                }
     RETURN_TYPES = ("CONDITIONING", "CONDITIONING")
     RETURN_NAMES = ("positive", "negative")
     FUNCTION = "append"
 
     CATEGORY = "instance/conditioning"
 
-    def _get_position_conds(self, clip, tracking, text):
+    def _get_position_conds(self, clip, tracking, text, masks=None):
         # Get prompts and their class id and trakcer id
         prompt_pairs = extract_prompts(text)
 
@@ -30,15 +34,17 @@ class InstanceDiffusionTrackingPromptNode:
             _, cond_pooled = clip.encode_from_tokens(
                 clip.tokenize(prompt), return_pooled=True)
             # A tracker_id of -1 means that it is prompting all instances of a single class
-            if tracker_id != -1:
-                position_cond = {'cond_pooled': cond_pooled, 'positions':
-                                 tracking[class_id][tracker_id]}
+            tracker_ids = [tracker_id] if tracker_id != -1 else tracking[class_id]
+    
+            for t_id in tracker_ids:
+                position_cond = {
+                    'cond_pooled': cond_pooled,
+                    'positions': tracking[class_id][t_id]
+                }
+                if masks is not None:
+                    position_cond['instance_masks'] = masks
+
                 position_conds.append(position_cond)
-            else:
-                for tracker_id in tracking[class_id]:
-                    position_cond = {'cond_pooled': cond_pooled,
-                                     'positions': tracking[class_id][tracker_id]}
-                    position_conds.append(position_cond)
 
         return position_conds
 
@@ -50,7 +56,7 @@ class InstanceDiffusionTrackingPromptNode:
             cond = n[1]
             prev = []
             has_instance = 'instance_diffusion' in cond
-            instance_conditioning = conditioning['instance_diffusion'] if has_instance else InstanceConditioning(
+            instance_conditioning = cond['instance_diffusion'] if has_instance else InstanceConditioning(
                 fusers, positionnet)
             cond['instance_diffusion'] = instance_conditioning
             instance_conditioning.add_conds(position_conds)
@@ -61,15 +67,15 @@ class InstanceDiffusionTrackingPromptNode:
 
         return cond_out
 
-    def append(self, positive, negative, clip, tracking, fusers, positionnet, positive_text, negative_text, fusers_batch_size=None):
+    def append(self, positive, negative, clip, tracking, fusers, positionnet, positive_text, negative_text, fusers_batch_size=None, masks=None):
 
         positive_positions = self._get_position_conds(
-            clip, tracking, positive_text)
+            clip, tracking, positive_text, masks)
         positive = self._apply_position_conds(
             positive_positions, positive, fusers, positionnet)
 
         negative_positions = self._get_position_conds(
-            clip, tracking, negative_text)
+            clip, tracking, negative_text, masks)
         negative = self._apply_position_conds(
             negative_positions, negative, fusers, positionnet)
 

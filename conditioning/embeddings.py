@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import numpy as np
 from skimage.transform import resize
 from ..utils.decode_item import binary_mask_to_polygon, sample_uniform_sparse_points
@@ -105,20 +106,23 @@ def sample_sparse_points_from_mask(mask, k=256):
 
 
 # [x0, y0, x1, y1]
-def get_grounding_input_from_coords(coords, img_width, img_height):
+def get_grounding_input_from_coords(coords, img_width, img_height, mask=None):
     x0, y0, x1, y1, coord_width, coord_height = coords
     location = [x0 / coord_width, y0 / coord_height,
                 x1 / coord_width, y1 / coord_height]
 
     point = get_point_from_box(location)
-    binary_mask = get_empty_binary_mask(img_width, img_height)
+    if mask is None:
+        binary_mask = get_empty_binary_mask(img_width, img_height)
+    else:
+        mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0), size=(img_height, img_width), mode="nearest").squeeze(0).permute(1, 2, 0)
+        binary_mask = mask.numpy()
 
     scribble = sample_random_points_from_mask(binary_mask, k=N_SCRIBBLE_POINTS)
     scribble = convert_points(scribble, img_width, img_height)
 
     polygon = sample_sparse_points_from_mask(binary_mask, k=N_POLYGON_POINTS)
     polygon = convert_points(polygon, img_width, img_height)
-
     segment = resize(binary_mask.astype(np.float32),
                      (img_width, img_height)).squeeze()
     # segment = np.stack(segment).astype(np.float32).squeeze() if len(segment) > 0 else segment
@@ -130,7 +134,6 @@ def get_grounding_input_from_coords(coords, img_width, img_height):
         box=location,
         point=point,
     )
-
 
 def create_zero_input_tensors(n_frames, img_width, img_height):
     masks = torch.zeros(n_frames, N_MAX_OBJECTS)
@@ -177,9 +180,9 @@ def prepare_embeddings(conds, latent_shape, idxs, use_masked_att=False):
         for cond_idx, cond in enumerate(conds):
             if cond['positions'][frame_idx] is None:
                 continue
-
+            instance_mask = cond['instance_masks'][frame_idx] if 'instance_masks' in cond else None
             grounding = get_grounding_input_from_coords(
-                cond['positions'][frame_idx], latent_width, latent_height)
+                cond['positions'][frame_idx], latent_width, latent_height, instance_mask)
             embeddings['masks'][grounding_idx][cond_idx] = 1
             embeddings['text_masks'][grounding_idx][cond_idx] = 1
             embeddings['prompts'][grounding_idx][cond_idx] = cond['cond_pooled']
